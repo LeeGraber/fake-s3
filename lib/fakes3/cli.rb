@@ -15,7 +15,7 @@ module FakeS3
     def server
       store = nil
       if options[:root]
-        root = File.expand_path(options[:root])
+        root = ::File.expand_path(options[:root])
         # TODO Do some sanity checking here
         store = FileStore.new(root)
       end
@@ -45,7 +45,7 @@ module FakeS3
 
       address = options[:address] || '0.0.0.0'
 
-      puts "Loading FakeS3 with #{root} on port #{options[:port]} with hostname #{hostname}"
+      puts "Hello. Loading FakeS3 with #{root} on port #{options[:port]} with hostname #{hostname}"
       server = FakeS3::Server.new(address,options[:port],store,hostname)
       server.serve
     end

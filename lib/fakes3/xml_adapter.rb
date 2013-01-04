@@ -175,5 +175,30 @@ module FakeS3
       }
       output
     end
+
+    def self.initiate_multipart_upload(bucket_name, obj_key, id)
+      output = ""
+      xml = Builder::XmlMarkup.new(:target => output)
+      xml.instruct! :xml, :version=>"1.0", :encoding=>"UTF-8"
+      xml.InitiateMultipartUploadResult(:xmlns => 'http://s3.amazonaws.com/doc/2006-03-01') do |imur|
+        imur.Bucket(bucket_name)
+        imur.Key(obj_key)
+        imur.UploadId(id)
+      end
+      output
+    end
+
+    def self.complete_multipart_upload(location, bucket_name, obj_key, etag)
+      output = ""
+      xml = Builder::XmlMarkup.new(:target => output)
+      xml.instruct! :xml, :version=>"1.0", :encoding=>"UTF-8"
+      xml.CompleteMultipartUploadResult(:xmlns => 'http://s3.amazonaws.com/doc/2006-03-01') do |cmur|
+        cmur.Location(location)
+        cmur.Bucket(bucket_name)
+        cmur.Key(obj_key)
+        cmur.ETag(etag)
+      end
+      output
+    end
   end
 end

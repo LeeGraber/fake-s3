@@ -1,4 +1,5 @@
 require 'webrick'
+require 'uri'
 require 'fakes3/file_store'
 require 'fakes3/xml_adapter'
 require 'fakes3/bucket_query'
@@ -19,6 +20,9 @@ module FakeS3
     MOVE = "MOVE"
     DELETE_OBJECT = "DELETE_OBJECT"
     DELETE_BUCKET = "DELETE_BUCKET"
+    INITIATE_MULTIPART_UPLOAD = "INITIATE_MULTIPART_UPLOAD"
+    UPLOAD_PART = "UPLOAD_PART"
+    COMPLETE_MULTIPART_UPLOAD = "COMPLETE_MULTIPART_UPLOAD"
 
     attr_accessor :bucket,:object,:type,:src_bucket,
                   :src_object,:method,:webrick_request,
@@ -144,6 +148,8 @@ module FakeS3
         response['Etag'] = "\"#{real_obj.md5}\""
       when Request::CREATE_BUCKET
         @store.create_bucket(s_req.bucket)
+      when Request::UPLOAD_PART
+        response['Etag'] = @store.upload_part(s_req.bucket,s_req.object,s_req.webrick_request)
       end
 
       response.status = 200
@@ -151,8 +157,32 @@ module FakeS3
       response['Content-Type'] = "text/xml"
     end
 
-    # Posts aren't supported yet
+    # Needed for support of multi-part upload
     def do_POST(request,response)
+      s_req = normalize_request(request)
+      case s_req.type
+      when Request::INITIATE_MULTIPART_UPLOAD
+        bucket_obj = @store.get_bucket(s_req.bucket)
+        if !bucket_obj
+          # Lazily create a bucket.  TODO fix this to return the proper error
+          bucket_obj = @store.create_bucket(s_req.bucket)
+        end
+        upload_id = @store.initiate_multipart_upload(bucket_obj,s_req.object,s_req.webrick_request)
+
+        response.status = 200
+        response.body = XmlAdapter.initiate_multipart_upload(bucket_obj, s_req.object, upload_id)
+        response['Content-Type'] = "text/xml"
+      when Request::COMPLETE_MULTIPART_UPLOAD
+        bucket_obj = @store.get_bucket(s_req.bucket)
+        upload_id = @store.complete_multipart_upload(bucket_obj,s_req.object,s_req.webrick_request)
+        location = "http://#{request.host}#{request.path}"
+        response.status = 200
+        response.body = XmlAdapter.complete_multipart_upload(location, s_req.bucket, s_req.object, upload_id)
+        response['Content-Type'] = "text/xml"
+      else
+        raise "Unknown operation" # This should have failed earlier
+      end
+
     end
 
     def do_DELETE(request,response)
@@ -234,6 +264,7 @@ module FakeS3
     def normalize_put(webrick_req,s_req)
       path = webrick_req.path
       path_len = path.size
+      query = WEBrick::HTTPUtils.parse_query(webrick_req.query_string)
       if path == "/"
         if s_req.bucket
           s_req.type = Request::CREATE_BUCKET
@@ -247,6 +278,8 @@ module FakeS3
           else
             if webrick_req.request_line =~ /\?acl/
               s_req.type = Request::SET_ACL
+            elsif query['partNumber'] && query['uploadId']
+              s_req.type = Request::UPLOAD_PART
             else
               s_req.type = Request::STORE
             end
@@ -264,13 +297,35 @@ module FakeS3
 
       copy_source = webrick_req.header["x-amz-copy-source"]
       if copy_source and copy_source.size == 1
-        src_elems = copy_source.first.split("/")
+        copy_source = ::URI.unescape(copy_source.first)
+        src_elems = copy_source.split("/")
         root_offset = src_elems[0] == "" ? 1 : 0
         s_req.src_bucket = src_elems[root_offset]
         s_req.src_object = src_elems[1 + root_offset,src_elems.size].join("/")
         s_req.type = Request::COPY
       end
 
+      s_req.webrick_request = webrick_req
+    end
+
+    def normalize_post(webrick_req,s_req)
+      path = webrick_req.path
+      path_len = path.size
+      query = WEBrick::HTTPUtils.parse_query(webrick_req.query_string)
+      if s_req.is_path_style
+        elems = path[1,path_len].split("/")
+        s_req.bucket = elems[0]
+        if query['uploads']
+          s_req.type = Request::INITIATE_MULTIPART_UPLOAD
+        elsif query['uploadId']
+          s_req.type = Request::COMPLETE_MULTIPART_UPLOAD
+        else
+          raise "Unknown operation"
+        end
+      else
+        raise "Unknown operation"
+      end
+      s_req.object = elems[1,elems.size].join('/')
       s_req.webrick_request = webrick_req
     end
 
@@ -297,6 +352,8 @@ module FakeS3
         normalize_get(webrick_req,s_req)
       when 'DELETE'
         normalize_delete(webrick_req,s_req)
+      when 'POST'
+        normalize_post(webrick_req,s_req)
       else
         raise "Unknown Request"
       end
@@ -310,6 +367,11 @@ module FakeS3
       puts request.path
       request.each do |k,v|
         puts "#{k}:#{v}"
+      end
+      puts "QUERY PARAMETERS"
+      puts "#{request.query_string}"
+      request.query.each do |k,v|
+        puts "#{k}=#{v}"
       end
       puts "----------End Dump -------------"
     end
