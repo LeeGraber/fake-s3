@@ -43,6 +43,7 @@ module FakeS3
   end
 
   class Servlet < WEBrick::HTTPServlet::AbstractServlet
+
     def initialize(server,store,hostname)
       super(server)
       @store = store
@@ -50,7 +51,29 @@ module FakeS3
       @root_hostnames = [hostname,'localhost','s3.amazonaws.com','s3.localhost']
     end
 
+    def self.flakiness=(val)
+      @@flakiness = val
+    end
+
+    def flakey?
+      if (@@flakiness)
+        # Instead of trying to track the number of requests and doing an exact percentage of failures
+        # We simply do random number generation and mod to see if the random number is a certain value and
+        # then throw an exception
+        i = Random.rand(@@flakiness)
+        return true if i == 7 # 7 seems like a good 'unlucky' number :)
+      end
+      false
+    end
+
     def do_GET(request, response)
+
+      if flakey?
+        response.status = 500
+        response.body = ""
+        return
+      end
+
       s_req = normalize_request(request)
 
       case s_req.type
@@ -89,10 +112,9 @@ module FakeS3
           return
         end
 
+        stat = File::Stat.new(real_obj.io.path)
         response.status = 200
         response['Content-Type'] = real_obj.content_type
-        stat = File::Stat.new(real_obj.io.path)
-
         response['Last-Modified'] = stat.mtime.iso8601()
         response['Etag'] = "\"#{real_obj.md5}\""
         response['Accept-Ranges'] = "bytes"
@@ -132,6 +154,13 @@ module FakeS3
     end
 
     def do_PUT(request,response)
+
+      if flakey?
+        response.status = 500
+        response.body = ""
+        return
+      end
+
       s_req = normalize_request(request)
 
       case s_req.type
@@ -159,6 +188,13 @@ module FakeS3
 
     # Needed for support of multi-part upload
     def do_POST(request,response)
+
+      if flakey?
+        response.status = 500
+        response.body = ""
+        return
+      end
+      
       s_req = normalize_request(request)
       case s_req.type
       when Request::INITIATE_MULTIPART_UPLOAD
@@ -186,6 +222,13 @@ module FakeS3
     end
 
     def do_DELETE(request,response)
+
+      if flakey?
+        response.status = 500
+        response.body = ""
+        return
+      end
+      
       s_req = normalize_request(request)
 
       case s_req.type
@@ -379,6 +422,8 @@ module FakeS3
 
 
   class Server
+    attr_accessor :flakiness
+
     def initialize(address,port,store,hostname)
       @address = address
       @port = port
@@ -388,6 +433,7 @@ module FakeS3
 
     def serve
       @server = WEBrick::HTTPServer.new(:BindAddress => @address, :Port => @port)
+      Servlet.flakiness = self.flakiness if self.flakiness
       @server.mount "/", Servlet, @store,@hostname
       trap "INT" do @server.shutdown end
       @server.start

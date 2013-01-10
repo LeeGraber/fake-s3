@@ -20,6 +20,8 @@ module FakeS3
   class FileStore
     SHUCK_METADATA_DIR = ".fakes3_metadataFFF"
 
+    attr_accessor :exists_delay
+
     def initialize(root)
       @root = root
       @buckets = []
@@ -86,15 +88,25 @@ module FakeS3
         real_obj = S3Object.new
         obj_root = ::File.join(@root,bucket,object_name,SHUCK_METADATA_DIR)
         return nil unless File.exists?(obj_root)
+
+        content_path = ::File.join(obj_root,"content")
+
+        if self.exists_delay
+          if (Time.now - ::File.mtime(content_path) < self.exists_delay)
+            puts "Faking existence failure because document too 'new' : #{bucket}, #{object_name}"
+            return nil
+          end
+        end
+
         metadata = YAML.load(::File.open(::File.join(obj_root,"metadata"),'rb'))
         real_obj.name = object_name
         real_obj.md5 = metadata[:md5]
         real_obj.content_type = metadata.fetch(:content_type) { "application/octet-stream" }
         #real_obj.io = ::File.open(::File.join(obj_root,"content"),'rb')
-        real_obj.io = RateLimitableFile.open(::File.join(obj_root,"content"),'rb')
+        real_obj.io = RateLimitableFile.open(content_path,'rb')
         real_obj.size = metadata.fetch(:size) { 0 }
         real_obj.creation_date = ::File.ctime(obj_root).iso8601()
-        real_obj.modified_date = metadata.fetch(:modified_date) { ::File.mtime(::File.join(obj_root,"content")).iso8601() }
+        real_obj.modified_date = metadata.fetch(:modified_date) { ::File.mtime(content_path).iso8601() }
         return real_obj
       rescue
         puts $!
