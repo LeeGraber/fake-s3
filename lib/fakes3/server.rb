@@ -44,6 +44,8 @@ module FakeS3
 
   class Servlet < WEBrick::HTTPServlet::AbstractServlet
 
+    @@flakiness = nil
+    
     def initialize(server,store,hostname)
       super(server)
       @store = store
@@ -155,6 +157,7 @@ module FakeS3
 
     def do_PUT(request,response)
 
+      dump_request(request)
       if flakey?
         response.status = 500
         response.body = ""
@@ -194,6 +197,8 @@ module FakeS3
         response.body = ""
         return
       end
+
+      dump_request(request)
       
       s_req = normalize_request(request)
       case s_req.type
